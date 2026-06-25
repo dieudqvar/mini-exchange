@@ -90,18 +90,18 @@ echo -e "${YELLOW}▸ Market Service Tests${NC}"
 RESPONSE=$(curl -s "$MARKET_URL/symbols")
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MARKET_URL/symbols")
 assert_status "GET /symbols returns 200" 200 "$STATUS"
-assert_contains "Symbols contain AAPL" "AAPL" "$RESPONSE"
-assert_contains "Symbols contain GOOGL" "GOOGL" "$RESPONSE"
+assert_contains "Symbols contain BTC" "BTC" "$RESPONSE"
+assert_contains "Symbols contain ETH" "ETH" "$RESPONSE"
 
 # Test: Get all prices
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MARKET_URL/prices")
 assert_status "GET /prices returns 200" 200 "$STATUS"
 
 # Test: Get specific price
-RESPONSE=$(curl -s "$MARKET_URL/prices/AAPL")
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MARKET_URL/prices/AAPL")
-assert_status "GET /prices/AAPL returns 200" 200 "$STATUS"
-assert_contains "Price response has symbol" "AAPL" "$RESPONSE"
+RESPONSE=$(curl -s "$MARKET_URL/prices/BTC")
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$MARKET_URL/prices/BTC")
+assert_status "GET /prices/BTC returns 200" 200 "$STATUS"
+assert_contains "Price response has symbol" "BTC" "$RESPONSE"
 assert_contains "Price response has price field" "price" "$RESPONSE"
 
 # Test: Invalid symbol returns 404
@@ -133,7 +133,7 @@ echo -e "${YELLOW}▸ Order Tests - Successful BUY${NC}"
 
 BUY_FULL=$(curl -s -w "\n%{http_code}" -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user1", "symbol": "AAPL", "side": "BUY", "quantity": 10}')
+  -d '{"user_id": "user1", "symbol": "BTC", "side": "BUY", "quantity": 0.5}')
 BUY_STATUS=$(echo "$BUY_FULL" | tail -1)
 BUY_RESPONSE=$(echo "$BUY_FULL" | sed '$d')
 assert_status "POST /orders BUY returns 201" 201 "$BUY_STATUS"
@@ -144,14 +144,14 @@ ORDER_ID=$(echo "$BUY_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -
 
 # Verify portfolio updated
 PORTFOLIO=$(curl -s "$PORTFOLIO_URL/portfolio/user1")
-assert_contains "Portfolio has AAPL after BUY" "AAPL" "$PORTFOLIO"
+assert_contains "Portfolio has BTC after BUY" "BTC" "$PORTFOLIO"
 
 # Test: Get order by ID
 if [ -n "$ORDER_ID" ]; then
     ORDER_RESPONSE=$(curl -s "$PORTFOLIO_URL/orders/$ORDER_ID")
     ORDER_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PORTFOLIO_URL/orders/$ORDER_ID")
     assert_status "GET /orders/{orderId} returns 200" 200 "$ORDER_STATUS"
-    assert_contains "Order has correct symbol" "AAPL" "$ORDER_RESPONSE"
+    assert_contains "Order has correct symbol" "BTC" "$ORDER_RESPONSE"
 fi
 
 ##############################################################################
@@ -160,15 +160,15 @@ fi
 echo ""
 echo -e "${YELLOW}▸ Order Tests - Successful SELL${NC}"
 
-# First, buy some MSFT
+# First, buy some ETH
 curl -s -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user1", "symbol": "MSFT", "side": "BUY", "quantity": 5}' > /dev/null
+  -d '{"user_id": "user1", "symbol": "ETH", "side": "BUY", "quantity": 5}' > /dev/null
 
 # Now sell it (use single curl to avoid double request)
 SELL_FULL=$(curl -s -w "\n%{http_code}" -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user1", "symbol": "MSFT", "side": "SELL", "quantity": 3}')
+  -d '{"user_id": "user1", "symbol": "ETH", "side": "SELL", "quantity": 3}')
 SELL_STATUS=$(echo "$SELL_FULL" | tail -1)
 SELL_RESPONSE=$(echo "$SELL_FULL" | sed '$d')
 assert_status "POST /orders SELL returns 201" 201 "$SELL_STATUS"
@@ -180,13 +180,13 @@ assert_contains "SELL order is EXECUTED" "EXECUTED" "$SELL_RESPONSE"
 echo ""
 echo -e "${YELLOW}▸ Order Tests - Insufficient Balance${NC}"
 
-# user2 has $50,000 - try to buy way more than they can afford
+# user2 has $50,000 - try to buy way more than they can afford (10 BTC = $600k+)
 REJECT_RESPONSE=$(curl -s -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user2", "symbol": "AAPL", "side": "BUY", "quantity": 100000}')
+  -d '{"user_id": "user2", "symbol": "BTC", "side": "BUY", "quantity": 10}')
 REJECT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user2", "symbol": "AAPL", "side": "BUY", "quantity": 100000}')
+  -d '{"user_id": "user2", "symbol": "BTC", "side": "BUY", "quantity": 10}')
 assert_status "BUY with insufficient balance returns 400" 400 "$REJECT_STATUS"
 assert_contains "Rejection mentions insufficient balance" "Insufficient balance" "$REJECT_RESPONSE"
 
@@ -198,10 +198,10 @@ echo -e "${YELLOW}▸ Order Tests - Insufficient Assets${NC}"
 
 SELL_REJECT_RESPONSE=$(curl -s -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user2", "symbol": "TSLA", "side": "SELL", "quantity": 100}')
+  -d '{"user_id": "user2", "symbol": "SOL", "side": "SELL", "quantity": 100}')
 SELL_REJECT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user2", "symbol": "TSLA", "side": "SELL", "quantity": 100}')
+  -d '{"user_id": "user2", "symbol": "SOL", "side": "SELL", "quantity": 100}')
 assert_status "SELL without assets returns 400" 400 "$SELL_REJECT_STATUS"
 assert_contains "Rejection mentions insufficient assets" "Insufficient assets" "$SELL_REJECT_RESPONSE"
 
@@ -213,7 +213,7 @@ echo -e "${YELLOW}▸ Order Tests - Invalid Quantity${NC}"
 
 INVALID_QTY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$PORTFOLIO_URL/orders" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user1", "symbol": "AAPL", "side": "BUY", "quantity": -5}')
+  -d '{"user_id": "user1", "symbol": "BTC", "side": "BUY", "quantity": -5}')
 assert_status "BUY with negative quantity returns 400" 400 "$INVALID_QTY_STATUS"
 
 ##############################################################################
@@ -252,7 +252,7 @@ echo ""
 echo -e "${YELLOW}▸ Portfolio Correctness After Trades${NC}"
 
 FINAL_PORTFOLIO=$(curl -s "$PORTFOLIO_URL/portfolio/user1")
-assert_contains "Final portfolio has AAPL holdings" "AAPL" "$FINAL_PORTFOLIO"
+assert_contains "Final portfolio has BTC holdings" "BTC" "$FINAL_PORTFOLIO"
 assert_contains "Final portfolio has cash_balance" "cash_balance" "$FINAL_PORTFOLIO"
 
 # user2 should still have close to original balance (orders were rejected)

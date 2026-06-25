@@ -13,3 +13,5 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
+rdkafka = { version = "0.36.2", features = ["cmake-build", "tokio"] }
+dotenvy = "0.15"

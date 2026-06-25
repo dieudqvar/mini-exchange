@@ -1,6 +1,6 @@
 use actix_web::{web, HttpResponse};
 use chrono::Utc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use tracing::info;
 use uuid::Uuid;
 
@@ -8,7 +8,7 @@ use crate::models::*;
 
 /// In-memory event store shared across request handlers.
 pub struct AppState {
-    pub events: RwLock<Vec<AuditEvent>>,
+    pub events: Arc<RwLock<Vec<AuditEvent>>>,
 }
 
 /// POST /events - Receive and store an audit event.
