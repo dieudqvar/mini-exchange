@@ -1,0 +1,39 @@
+############################################
+# Stage 1: Build
+############################################
+FROM rust:1.88-slim as builder
+
+# Install build dependencies (required for OpenSSL / reqwest in the workspace)
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY market-service/ ./market-service/
+COPY portfolio-service/ ./portfolio-service/
+COPY audit-service/ ./audit-service/
+
+# Build only the portfolio-service binary in release mode
+RUN cargo build --release --bin portfolio-service
+
+############################################
+# Stage 2: Runtime
+############################################
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/portfolio-service /usr/local/bin/portfolio-service
+
+ENV HOST=0.0.0.0
+ENV PORT=8082
+ENV MARKET_SERVICE_URL=http://market-service:8081
+ENV AUDIT_SERVICE_URL=http://audit-service:8083
+
+EXPOSE 8082
+
+CMD ["portfolio-service"]

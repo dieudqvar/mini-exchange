@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "market-service",
+    "portfolio-service",
+    "audit-service",
+]
+resolver = "2"

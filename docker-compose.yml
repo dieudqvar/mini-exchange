@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  market-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.market
+    ports:
+      - "8081:8081"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8081
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - exchange-network
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.audit
+    ports:
+      - "8083:8083"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8083
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - exchange-network
+
+  portfolio-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.portfolio
+    ports:
+      - "8082:8082"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8082
+      - MARKET_SERVICE_URL=http://market-service:8081
+      - AUDIT_SERVICE_URL=http://audit-service:8083
+      - RUST_LOG=info
+    depends_on:
+      market-service:
+        condition: service_healthy
+      audit-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - exchange-network
+
+networks:
+  exchange-network:
+    driver: bridge
