@@ -1,6 +1,8 @@
 # Rust build artifacts
 target/
 .env 
+.env.example
+
 
 # OS generated files
 .DS_Store
