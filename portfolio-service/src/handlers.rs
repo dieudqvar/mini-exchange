@@ -18,7 +18,7 @@ pub async fn get_portfolio(
 ) -> HttpResponse {
     let user_id = path.into_inner();
 
-    match data.store.get_portfolio(&user_id) {
+    match data.store.get_portfolio(&user_id).await {
         Some(portfolio) => HttpResponse::Ok().json(portfolio),
         None => {
             let error = ErrorResponse {
@@ -32,21 +32,21 @@ pub async fn get_portfolio(
 
 /// POST /orders - Submit a new market order.
 ///
-/// Accepts an `OrderRequest` and processes it through the order engine.
-/// Returns the created order with its execution status.
+/// Accepts an `OrderRequest` and buffers it into Kafka for HFT async processing.
+/// Returns 202 Accepted immediately with the PENDING order details.
 pub async fn create_order(
     data: web::Data<AppState>,
     body: web::Json<OrderRequest>,
 ) -> HttpResponse {
     let request = body.into_inner();
 
-    match data.order_engine.process_order(&data.store, request).await {
+    match data.order_engine.accept_order(request).await {
         Ok(order) => {
             let response = OrderResponse {
-                message: format!("Order {} executed successfully", order.id),
+                message: format!("Order {} accepted for processing", order.id),
                 order,
             };
-            HttpResponse::Created().json(response)
+            HttpResponse::Accepted().json(response)
         }
         Err((status_code, error)) => {
             match status_code {
@@ -66,7 +66,7 @@ pub async fn get_order(
 ) -> HttpResponse {
     let order_id = path.into_inner();
 
-    match data.store.get_order(&order_id) {
+    match data.store.get_order(&order_id).await {
         Some(order) => HttpResponse::Ok().json(order),
         None => {
             let error = ErrorResponse {

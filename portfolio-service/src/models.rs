@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Side of a trade order.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
 #[serde(rename_all = "UPPERCASE")]
+#[sqlx(type_name = "text", rename_all = "UPPERCASE")]
 pub enum OrderSide {
     Buy,
     Sell,
@@ -19,8 +20,9 @@ impl std::fmt::Display for OrderSide {
 }
 
 /// Current status of an order.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
 #[serde(rename_all = "UPPERCASE")]
+#[sqlx(type_name = "text", rename_all = "UPPERCASE")]
 pub enum OrderStatus {
     Pending,
     Executed,
@@ -46,7 +48,7 @@ pub struct Portfolio {
 }
 
 /// Represents a trade order in the system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Order {
     pub id: String,
     pub user_id: String,

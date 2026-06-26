@@ -20,6 +20,7 @@ pub struct OrderEngine {
     audit_service_url: String,
     kafka_producer: Option<FutureProducer>,
     kafka_topic_audit: String,
+    kafka_topic_incoming: String,
     prices_cache: Arc<RwLock<HashMap<String, f64>>>,
 }
 
@@ -73,24 +74,18 @@ impl OrderEngine {
             audit_service_url,
             kafka_producer,
             kafka_topic_audit: "audit-events".to_string(),
+            kafka_topic_incoming: "incoming-orders".to_string(),
             prices_cache,
         }
     }
 
-    /// Processes an order request end-to-end:
-    /// 1. Validates the request
-    /// 2. Fetches current price from Local Cache (or Market REST fallback)
-    /// 3. Executes the trade against the portfolio
-    /// 4. Sends audit events
-    pub async fn process_order(
+    /// Step 1 (API Gateway): Accepts the order request, buffers it in Kafka, and returns immediately.
+    /// This removes the DB bottleneck from the HTTP request loop.
+    pub async fn accept_order(
         &self,
-        store: &Store,
         request: OrderRequest,
     ) -> Result<Order, (u16, ErrorResponse)> {
-        let order_id = Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-
-        // Validate quantity
+        // Validate basic info
         if request.quantity <= 0.0 {
             return Err((
                 400,
@@ -101,19 +96,8 @@ impl OrderEngine {
             ));
         }
 
-        // Check if user exists
-        if store.get_portfolio(&request.user_id).is_none() {
-            return Err((
-                404,
-                ErrorResponse {
-                    error: "USER_NOT_FOUND".to_string(),
-                    message: format!("User '{}' not found", request.user_id),
-                },
-            ));
-        }
-
-        // Create initial order
-        let mut order = Order {
+        let order_id = Uuid::new_v4().to_string();
+        let order = Order {
             id: order_id.clone(),
             user_id: request.user_id.clone(),
             symbol: request.symbol.to_uppercase(),
@@ -123,11 +107,57 @@ impl OrderEngine {
             total: None,
             status: OrderStatus::Pending,
             reject_reason: None,
-            created_at: now,
+            created_at: Utc::now().to_rfc3339(),
         };
+
+        // If Kafka is enabled, publish to incoming-orders topic
+        if let Some(ref producer) = self.kafka_producer {
+            let topic = self.kafka_topic_incoming.clone();
+            let payload = serde_json::to_string(&order).unwrap();
+            let key = order.id.clone();
+            
+            let record = FutureRecord::to(&topic)
+                .key(&key)
+                .payload(&payload);
+                
+            match producer.send(record, Duration::from_secs(2)).await {
+                Ok(_) => {
+                    info!(order_id = %key, "Order accepted and buffered into Kafka");
+                }
+                Err((e, _)) => {
+                    error!("Failed to enqueue order to Kafka: {}", e);
+                    return Err((500, ErrorResponse {
+                        error: "QUEUE_ERROR".to_string(),
+                        message: "Failed to queue order".to_string(),
+                    }));
+                }
+            }
+        } else {
+            warn!("Kafka not available. Order dropped. Please enable Kafka for HFT mode.");
+            return Err((503, ErrorResponse {
+                error: "SERVICE_UNAVAILABLE".to_string(),
+                message: "Kafka required for async processing".to_string(),
+            }));
+        }
 
         // Send ORDER_CREATED audit event
         self.send_audit_event("ORDER_CREATED", &order).await;
+
+        // Return immediately with 202 Accepted semantics
+        Ok(order)
+    }
+
+    /// Step 2 (Core Engine): Processes the accepted order synchronously in memory.
+    /// This is called by the background Kafka consumer, decoupling it from the HTTP layer.
+    pub async fn process_order(&self, store: Arc<Store>, mut order: Order) {
+        // Check if user exists (now an in-memory check!)
+        if store.get_portfolio(&order.user_id).await.is_none() {
+            order.status = OrderStatus::Rejected;
+            order.reject_reason = Some(format!("User '{}' not found", order.user_id));
+            store.save_order(order.clone()).await;
+            self.send_audit_event("ORDER_REJECTED", &order).await;
+            return;
+        }
 
         // Fetch price from Local Cache / Market Service
         let price = match self.fetch_price(&order.symbol).await {
@@ -135,36 +165,30 @@ impl OrderEngine {
             Err(e) => {
                 order.status = OrderStatus::Rejected;
                 order.reject_reason = Some(e.clone());
-                store.save_order(order.clone());
+                store.save_order(order.clone()).await;
                 self.send_audit_event("ORDER_REJECTED", &order).await;
-                return Err((
-                    503,
-                    ErrorResponse {
-                        error: "MARKET_SERVICE_UNAVAILABLE".to_string(),
-                        message: e,
-                    },
-                ));
+                return;
             }
         };
 
         order.price = Some(price);
-        let total = (price * request.quantity * 10000.0).round() / 10000.0;
+        let total = (price * order.quantity * 10000.0).round() / 10000.0;
         order.total = Some(total);
 
-        // Execute the trade
-        let result = match request.side {
+        // Execute the trade (100% IN-MEMORY -> Extremely Fast)
+        let result = match order.side {
             OrderSide::Buy => {
-                store.execute_buy(&request.user_id, &order.symbol, request.quantity, total)
+                store.execute_buy(&order.user_id, &order.symbol, order.quantity, total).await
             }
             OrderSide::Sell => {
-                store.execute_sell(&request.user_id, &order.symbol, request.quantity, total)
+                store.execute_sell(&order.user_id, &order.symbol, order.quantity, total).await
             }
         };
 
         match result {
             Ok(()) => {
                 order.status = OrderStatus::Executed;
-                store.save_order(order.clone());
+                store.save_order(order.clone()).await;
                 info!(
                     order_id = %order.id,
                     user = %order.user_id,
@@ -173,24 +197,16 @@ impl OrderEngine {
                     qty = order.quantity,
                     price = price,
                     total = total,
-                    "Order executed successfully"
+                    "Order executed successfully in RAM"
                 );
                 self.send_audit_event("ORDER_EXECUTED", &order).await;
-                Ok(order)
             }
             Err(reason) => {
                 order.status = OrderStatus::Rejected;
                 order.reject_reason = Some(reason.clone());
-                store.save_order(order.clone());
+                store.save_order(order.clone()).await;
                 warn!(order_id = %order.id, reason = %reason, "Order rejected");
                 self.send_audit_event("ORDER_REJECTED", &order).await;
-                Err((
-                    400,
-                    ErrorResponse {
-                        error: "ORDER_REJECTED".to_string(),
-                        message: reason,
-                    },
-                ))
             }
         }
     }
@@ -202,15 +218,13 @@ impl OrderEngine {
         // 1. Try local cache
         if let Ok(cache) = self.prices_cache.read() {
             if let Some(price) = cache.get(&sym_upper) {
-                info!(symbol = %symbol, price = %price, "Retrieved price from local cache");
                 return Ok(*price);
             }
         }
 
         // 2. Fallback to HTTP REST
         let url = format!("{}/prices/{}", self.market_service_url, sym_upper);
-        info!(url = %url, "Price not in cache, fallback to HTTP REST");
-
+        
         let response = self
             .http_client
             .get(&url)
@@ -220,11 +234,9 @@ impl OrderEngine {
             .map_err(|e| format!("Failed to connect to Market Service: {}", e))?;
 
         if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
             return Err(format!(
-                "Market Service returned error {}: {}",
-                status, body
+                "Market Service returned error {}",
+                response.status().as_u16()
             ));
         }
 
@@ -259,40 +271,12 @@ impl OrderEngine {
             let payload = serde_json::to_string(&event).unwrap();
             let key = order.id.clone();
             let p = producer.clone();
-            let et = event_type.to_string();
             
             tokio::spawn(async move {
                 let record = FutureRecord::to(&topic)
                     .key(&key)
                     .payload(&payload);
-                match p.send(record, Duration::from_secs(2)).await {
-                    Ok(_) => info!(event_type = %et, order_id = %key, "Audit event sent via Kafka"),
-                    Err((e, _)) => error!("Failed to send audit event via Kafka to {}: {}", topic, e),
-                }
-            });
-        } else {
-            // Fallback to HTTP
-            let url = format!("{}/events", self.audit_service_url);
-            let client = self.http_client.clone();
-            tokio::spawn(async move {
-                match client
-                    .post(&url)
-                    .json(&event)
-                    .timeout(std::time::Duration::from_secs(3))
-                    .send()
-                    .await
-                {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            info!(event_type = %event.event_type, order_id = %event.order_id, "Audit event sent via HTTP");
-                        } else {
-                            warn!("Audit service returned non-success status: {}", resp.status());
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to send audit event via HTTP: {}", e);
-                    }
-                }
+                let _ = p.send(record, Duration::from_secs(2)).await;
             });
         }
     }
@@ -339,7 +323,6 @@ async fn start_price_consumer(bootstrap_servers: &str, prices_cache: Arc<RwLock<
                             ) {
                                 if let Ok(mut cache) = prices_cache.write() {
                                     cache.insert(symbol.to_uppercase(), price);
-                                    info!(symbol = %symbol, price = %price, "Updated price in local cache from Kafka");
                                 }
                             }
                         }

@@ -40,11 +40,35 @@ The system supports the following real-time assets:
 
 ---
 
+## Database Architecture
+
+The system uses **PostgreSQL** for data persistence. To maintain isolation between microservices, a single PostgreSQL container hosts multiple distinct databases:
+
+1. **`audit_db`** (Audit Service)
+   - Stores the `audit_events` table (immutable ledger of all system events).
+2. **`portfolio_db`** (Portfolio Service)
+   - Stores the `portfolios`, `portfolio_assets`, and `orders` tables.
+
+**Connecting to the Database:**
+The PostgreSQL container maps to port **5433** 
+
+| Setting | Value |
+|---------|-------|
+| Host | `localhost` |
+| Port | `5433` |
+| User | `postgres` |
+| Password | `password` |
+| Databases | `audit_db`, `portfolio_db` |
+
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
 | Language | Rust (2021 edition) |
+| Database | PostgreSQL (via sqlx) |
 | HTTP Framework | actix-web 4 |
 | HTTP Client | reqwest 0.11 (with rustls-tls) |
 | WebSocket Client | tokio-tungstenite 0.21 (with rustls-tls) |
@@ -65,25 +89,25 @@ The system supports the following real-time assets:
 
 ### Run with Docker Compose (Recommended)
 
-1. Build and boot all containers (Kafka, Market, Portfolio, Audit):
+1. Build and boot all containers (Kafka, Postgres, Market, Portfolio, Audit):
    ```bash
-   docker compose -f 'mini-exchange/docker-compose.yml' up -d --build
+   docker compose up -d --build
    ```
 
 2. Monitor container statuses and healthchecks:
    ```bash
-   docker compose -f 'mini-exchange/docker-compose.yml' ps
+   docker compose ps
    ```
 
 3. Run integration tests once all services are healthy:
    ```bash
-   chmod +x mini-exchange/tests/integration_tests.sh
-   ./mini-exchange/tests/integration_tests.sh
+   chmod +x tests/integration_tests.sh
+   ./tests/integration_tests.sh
    ```
 
-4. Stop the services:
+4. Stop the services (and remove volumes to reset database):
    ```bash
-   docker compose -f 'mini-exchange/docker-compose.yml' down
+   docker compose down -v
    ```
 
 ---
@@ -154,6 +178,9 @@ curl http://localhost:8083/events
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KAFKA_BOOTSTRAP_SERVERS` | None | Address of the Kafka broker (e.g., `kafka:29092`). If empty, runs in REST-only fallback mode. |
+| `AUDIT_DATABASE_URL` | None | PostgreSQL connection string for Audit Service. Fallback: `DATABASE_URL`. |
+| `PORTFOLIO_DATABASE_URL` | None | PostgreSQL connection string for Portfolio Service. Fallback: `DATABASE_URL`. |
+| `DATABASE_URL` | None | Legacy fallback PostgreSQL connection string. |
 | `MARKET_SERVICE_URL` | `http://localhost:8081` | REST URL of Market Service (used as fallback by Portfolio Service) |
 | `AUDIT_SERVICE_URL` | `http://localhost:8083` | REST URL of Audit Service (used as fallback by Portfolio Service) |
 | `HOST` | `0.0.0.0` | Bind address |

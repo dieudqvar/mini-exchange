@@ -32,7 +32,7 @@ pub struct AuditEventRequest {
 }
 
 /// A stored audit event with additional metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AuditEvent {
     pub id: String,
     pub event_type: String,

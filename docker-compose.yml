@@ -57,6 +57,7 @@ services:
       - PORT=8083
       - RUST_LOG=info
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/audit_db
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8083/health" ]
       interval: 10s
@@ -67,6 +68,7 @@ services:
       - exchange-network
     depends_on:
       - kafka
+      - postgres
 
   portfolio-service:
     build:
@@ -81,6 +83,7 @@ services:
       - AUDIT_SERVICE_URL=http://audit-service:8083
       - RUST_LOG=info
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/portfolio_db
     depends_on:
       market-service:
         condition: service_healthy
@@ -88,12 +91,27 @@ services:
         condition: service_healthy
       kafka:
         condition: service_started
+      postgres:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8082/health" ]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - exchange-network
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
     networks:
       - exchange-network
 
@@ -112,3 +130,6 @@ services:
 networks:
   exchange-network:
     driver: bridge
+
+volumes:
+  postgres_data:

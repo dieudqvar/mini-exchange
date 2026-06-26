@@ -9,10 +9,10 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{StreamConsumer, Consumer};
 use rdkafka::Message;
 
-use handlers::AppState;
+use handlers::{AppState, EventStore};
 use models::{AuditEvent, AuditEventRequest};
 
-async fn start_audit_consumer(bootstrap_servers: &str, events_store: Arc<RwLock<Vec<AuditEvent>>>) {
+async fn start_audit_consumer(bootstrap_servers: &str, store: EventStore) {
     let mut retry_count = 0;
     let consumer: StreamConsumer = loop {
         match ClientConfig::new()
@@ -59,14 +59,15 @@ async fn start_audit_consumer(bootstrap_servers: &str, events_store: Arc<RwLock<
                                         timestamp: chrono::Utc::now().to_rfc3339(),
                                     };
 
-                                    if let Ok(mut events) = events_store.write() {
+                                    if let Err(err) = store.add_event(&event).await {
+                                        error!("Failed to save event to store: {}", err);
+                                    } else {
                                         info!(
                                             event_type = %event.event_type,
                                             order_id = %event.order_id,
                                             user_id = %event.user_id,
                                             "Audit Service processed and saved event"
                                         );
-                                        events.push(event);
                                     }
                                 }
                                 Err(err) => {
@@ -116,7 +117,44 @@ async fn main() -> std::io::Result<()> {
 
     info!("Audit Service starting on {}:{}", host, port);
 
-    let events_store = Arc::new(RwLock::new(Vec::new()));
+    let database_url = std::env::var("AUDIT_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .ok();
+    let events_store = if let Some(url) = database_url {
+        info!("Connecting to PostgreSQL database...");
+        let pool = sqlx::PgPool::connect(&url)
+            .await
+            .expect("Failed to connect to PostgreSQL");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS audit_events (
+                id VARCHAR(255) PRIMARY KEY,
+                event_type VARCHAR(255) NOT NULL,
+                order_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(255) NOT NULL,
+                details JSONB NOT NULL,
+                timestamp VARCHAR(255) NOT NULL
+            );"
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create audit_events table");
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_user_id ON audit_events(user_id);")
+            .execute(&pool)
+            .await
+            .expect("Failed to create index on user_id");
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_audit_events_order_id ON audit_events(order_id);")
+            .execute(&pool)
+            .await
+            .expect("Failed to create index on order_id");
+
+        info!("PostgreSQL connection established and schema initialized.");
+        EventStore::Postgres(pool)
+    } else {
+        warn!("DATABASE_URL not set. Running in-memory mode.");
+        EventStore::InMemory(Arc::new(RwLock::new(Vec::new())))
+    };
 
     // Spawn Kafka audit event consumer in background if config is available
     if let Some(servers) = kafka_bootstrap_servers {
@@ -127,7 +165,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     let app_state = web::Data::new(AppState {
-        events: events_store,
+        store: events_store,
     });
 
     HttpServer::new(move || {
